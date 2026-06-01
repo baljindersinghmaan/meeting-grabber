@@ -52,6 +52,21 @@ machine.
 The button states reflect reality: **Start** is disabled while recording,
 **Stop/Download** are disabled while idle — even if you close and reopen the popup.
 
+---
+
+## Get a summary (Fireflies / Read.ai style)
+
+The transcript is plain text, so any AI can summarize it:
+
+1. Download your transcript `.txt` (Stop or Download).
+2. Open [`SUMMARY_PROMPT.md`](SUMMARY_PROMPT.md) and copy the prompt block.
+3. Paste it into ChatGPT, Claude, Gemini, or any AI chat.
+4. Paste (or attach) your `.txt` right after the prompt and send.
+
+You'll get a structured summary — overview, participants, key discussion points,
+decisions, action items (with owners), open questions, and next steps. See
+[`SUMMARY_PROMPT.md`](SUMMARY_PROMPT.md) for tips on long meetings and tone tweaks.
+
 ### "Captions are OFF" message?
 The extension detects when the caption container is missing and tells you to turn
 on captions first, instead of failing silently. Turn on captions **before**
