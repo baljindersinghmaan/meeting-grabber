@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Meet Caption Grabber</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      width: 280px;
+      margin: 0;
+      padding: 14px;
+    }
+    h1 { font-size: 14px; margin: 0 0 10px; }
+    label { display: block; font-size: 12px; margin: 0 0 4px; opacity: 0.8; }
+    input[type="text"] {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px 8px;
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    .row { display: flex; gap: 8px; margin-bottom: 10px; }
+    button {
+      flex: 1;
+      padding: 8px 6px;
+      font-size: 13px;
+      cursor: pointer;
+      border: 1px solid rgba(128,128,128,0.4);
+      border-radius: 6px;
+      background: rgba(128,128,128,0.08);
+    }
+    button:disabled { opacity: 0.45; cursor: default; }
+    #start { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+    #stop  { background: #d93025; color: #fff; border-color: #d93025; }
+    #status {
+      font-size: 12px;
+      min-height: 32px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      background: rgba(128,128,128,0.10);
+      white-space: pre-wrap;
+    }
+    .warn { color: #d93025; }
+    .ok { color: #188038; }
+  </style>
+</head>
+<body>
+  <h1>Meet Caption Grabber</h1>
+
+  <label for="name">Transcript name</label>
+  <input type="text" id="name" placeholder="e.g. weekly-standup" />
+
+  <div class="row">
+    <button id="start">Start</button>
+    <button id="stop">Stop</button>
+  </div>
+  <div class="row">
+    <button id="download">Download</button>
+  </div>
+
+  <div id="status">Idle. Turn on captions (CC) in Meet, then click Start.</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
