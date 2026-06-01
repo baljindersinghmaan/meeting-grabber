@@ -20,17 +20,52 @@ machine.
 
 ---
 
-## Install (load unpacked)
+## Install (load unpacked in Chrome)
 
-1. Download/clone this folder to your machine.
-2. Open `chrome://extensions` in Chrome.
-3. Turn on **Developer mode** (top-right toggle).
-4. Click **Load unpacked** and select this project folder.
-5. (Optional) Pin the extension via the puzzle-piece toolbar icon so the popup
-   is one click away.
+Chrome doesn't list this extension in the Web Store — you load it directly from
+this folder using **Developer mode**. It's a one-time setup, takes ~30 seconds.
 
-> After changing any file, click the **reload (↻)** icon on the extension card,
-> then reload the meeting tab.
+1. **Get the code on your machine.** Either:
+   - Click **Code → Download ZIP** on the repo page and unzip it, **or**
+   - Clone it: `git clone <repo-url>`
+
+   Note the folder location (e.g. `C:\R And Projects\meeting-grabber`). The
+   folder must contain `manifest.json` directly inside it.
+
+2. **Open the extensions page.** In Chrome, paste this into the address bar and
+   press Enter:
+   ```
+   chrome://extensions
+   ```
+
+3. **Enable Developer mode.** Flip the **Developer mode** toggle in the
+   **top-right corner** of the page to **ON**. Three new buttons appear on the
+   top-left: **Load unpacked**, **Pack extension**, **Update**.
+
+4. **Load the extension.** Click **Load unpacked**. In the folder picker,
+   navigate to the project folder from step 1 (the one containing
+   `manifest.json`) and click **Select Folder**.
+   > Pick the folder *itself* — do **not** open it and select files inside.
+
+5. **Verify it loaded.** A card titled **Meeting Caption Grabber** should
+   appear in the list with no red error banner. If you see an error, see
+   [Troubleshooting install](#troubleshooting-install) below.
+
+6. **Pin it to the toolbar (recommended).** Click the **🧩 puzzle-piece** icon
+   in the Chrome toolbar, find **Meeting Caption Grabber**, and click the
+   **📌 pin** icon next to it. The extension icon now sits in your toolbar for
+   one-click access.
+
+### Troubleshooting install
+
+- **"Manifest file is missing or unreadable"** — You selected the wrong folder.
+  Pick the folder that has `manifest.json` directly inside it (not a parent
+  folder, not a subfolder).
+- **Nothing happens when I click the icon on a meeting page** — Reload the
+  meeting tab once after installing. Chrome only injects the content script
+  into tabs opened *after* the extension was loaded.
+- **I changed code, nothing updated** — On `chrome://extensions`, click the
+  **↻ reload** icon on the extension's card, then reload the meeting tab.
 
 ---
 
