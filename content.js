@@ -113,8 +113,31 @@
   // live in-progress buffers, keyed by the row's DOM element so re-renders of
   // the SAME element update one buffer instead of creating duplicates.
   let live = new Map();                  // Map<Element, {speaker, text}>
+  let sessionName = '';                  // filename base chosen when capture starts
+  let syncTimer = null;                  // pushes transcript to background for auto-download
+  let autoStartTimer = null;             // waits for captions to appear (auto-start)
+  let autoStartDone = false;             // only auto-start once per page load
 
   const LOG = '[Meet Caption Grabber]';
+
+  /* --- settings (persisted in storage.local, shared with the popup) -------- *
+   * autoStart: begin capturing automatically once captions appear.
+   * autoDownloadOnClose: save the RAW transcript if the meeting tab is closed
+   *   without clicking Stop (summarizing needs the live tab, so close = raw).
+   * transcriptName: preferred filename base (optional).
+   * ------------------------------------------------------------------------ */
+  let settings = { autoStart: false, autoDownloadOnClose: false, transcriptName: '' };
+  function loadSettings(cb) {
+    chrome.storage.local.get(
+      ['autoStart', 'autoDownloadOnClose', 'transcriptName'],
+      (s) => { settings = Object.assign(settings, s); if (cb) cb(); }
+    );
+  }
+  // Stay in sync if the user flips a toggle in the popup while a call is open.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    for (const k in changes) if (k in settings) settings[k] = changes[k].newValue;
+  });
 
   /* --- on-page indicator -------------------------------------------------- *
    * A floating badge so you can SEE that capture is live without opening the
@@ -346,6 +369,48 @@
     return serialize(cleanupLines(committed));
   }
 
+  // Like buildTranscript() but ALSO includes still-in-progress live buffers,
+  // without mutating state. Used by the auto-download-on-close sync so an
+  // abrupt tab close still saves the last few spoken lines.
+  function buildTranscriptIncludingLive() {
+    const liveLines = Array.from(live.values()).map((s) => ({ speaker: s.speaker, text: s.text }));
+    return serialize(cleanupLines(committed.concat(liveLines)));
+  }
+
+  // Default filename base when the user hasn't typed one (site + date/time).
+  function defaultName() {
+    const site = location.hostname.includes('teams') ? 'teams' : 'meet';
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return `${site}-transcript-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+  }
+
+  /* --- background sync (powers auto-download on tab close) ----------------- *
+   * While recording, push the latest RAW transcript to the background worker
+   * every few seconds so it can save it if the tab is closed. See background.js.
+   * ------------------------------------------------------------------------ */
+  function syncToBackground() {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'SYNC',
+        text: buildTranscriptIncludingLive(),
+        name: safeName(sessionName || settings.transcriptName, '.txt'),
+        autoDownload: !!settings.autoDownloadOnClose,
+      }).catch(() => {});
+    } catch (_) { /* background asleep; next tick retries */ }
+  }
+  function startSyncLoop() {
+    stopSyncLoop();
+    syncToBackground();
+    syncTimer = setInterval(syncToBackground, 2500);
+  }
+  function stopSyncLoop() {
+    if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
+  }
+  function clearBackground() {
+    try { chrome.runtime.sendMessage({ type: 'CLEAR' }).catch(() => {}); } catch (_) {}
+  }
+
   // Trigger a download from the page context (no "downloads" permission).
   function downloadFile(content, name, suffix, mime) {
     const blob = new Blob([content || ''], { type: mime || 'text/plain' });
@@ -381,6 +446,8 @@
     console.log(LOG, 'Start: captions container found, observing.', container);
     committed = [];
     live = new Map();
+    // Lock in a filename for this session (user-typed name, else date-stamped).
+    sessionName = (settings.transcriptName || '').trim() || defaultName();
     if (observer) observer.disconnect();
     observer = new MutationObserver(processCaptions);
     // Watch the whole container subtree: characterData catches word-by-word edits.
@@ -392,12 +459,14 @@
     running = true;
     setIndicator('recording', 'Recording captions — 0 line(s)');
     processCaptions();          // capture whatever is already on screen
+    startSyncLoop();            // keep background updated for auto-download-on-close
     return { ok: true };
   }
 
   function stop() {
     if (observer) { observer.disconnect(); observer = null; }
     running = false;
+    stopSyncLoop();
     flushLive();                // commit any in-progress lines
     const lines = cleanupLines(committed).length;
     console.log(LOG, `Stopped. ${lines} line(s) captured.`);
@@ -494,11 +563,12 @@
         sendResponse(start());
         return false;                            // sync response
       case 'STOP':
-        stopAndDeliver(msg.name, !!msg.saveRaw, msg.apiKey || '').then(sendResponse);
+        stopAndDeliver(msg.name || sessionName, !!msg.saveRaw, msg.apiKey || '')
+          .then((res) => { clearBackground(); sendResponse(res); }); // delivered -> no close re-download
         return true;                             // async response
       case 'DOWNLOAD':
         flushLive();                             // include anything still live, but keep capturing
-        downloadTranscriptSnapshot(msg.name);
+        downloadTranscriptSnapshot(msg.name || sessionName);
         sendResponse({ ok: true, lines: cleanupLines(committed).length });
         return false;
       case 'STATUS':
@@ -508,6 +578,34 @@
         sendResponse({ ok: false, error: 'unknown-message' });
         return false;
     }
+  });
+
+  /* --- auto-start --------------------------------------------------------- *
+   * When enabled, wait for the captions container to appear (i.e. the user
+   * turned on CC) and start capturing automatically — once per page load.
+   * ------------------------------------------------------------------------ */
+  function maybeAutoStart() {
+    if (autoStartDone || running || !settings.autoStart) return;
+    if (getContainer()) {
+      autoStartDone = true;
+      console.log(LOG, 'Auto-start: captions detected, starting capture.');
+      start();
+    }
+  }
+
+  /* --- final sync on tab close/navigation --------------------------------- *
+   * pagehide is the last reliable hook before teardown. Push the latest
+   * transcript so the background worker has it when chrome.tabs.onRemoved fires.
+   * ------------------------------------------------------------------------ */
+  window.addEventListener('pagehide', () => {
+    if (running) syncToBackground();
+  });
+
+  /* --- init --------------------------------------------------------------- */
+  loadSettings(() => {
+    // Poll for captions so auto-start works even if CC is turned on later.
+    autoStartTimer = setInterval(maybeAutoStart, 2000);
+    maybeAutoStart();
   });
 
   console.log(LOG, 'content script loaded on', location.href);

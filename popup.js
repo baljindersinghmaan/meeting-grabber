@@ -19,10 +19,16 @@ const els = {
   apiKey: document.getElementById('apiKey'),
   settings: document.getElementById('settings'),
   status: document.getElementById('status'),
+  autoStart: document.getElementById('autoStart'),
+  autoDownload: document.getElementById('autoDownload'),
 };
 
 const STORE_SAVE_RAW = 'saveRaw';
 const STORE_API_KEY  = 'groqApiKey';
+// Automation settings (read by content.js).
+const STORE_AUTO_START = 'autoStart';
+const STORE_AUTO_DOWNLOAD = 'autoDownloadOnClose';
+const STORE_NAME = 'transcriptName';
 
 function setStatus(text, cls) {
   els.status.textContent = text;
@@ -78,9 +84,14 @@ async function withTab(action) {
 /* --- settings persistence ---------------------------------------------- */
 async function loadSettings() {
   try {
-    const v = await chrome.storage.local.get([STORE_SAVE_RAW, STORE_API_KEY]);
+    const v = await chrome.storage.local.get([
+      STORE_SAVE_RAW, STORE_API_KEY, STORE_AUTO_START, STORE_AUTO_DOWNLOAD, STORE_NAME,
+    ]);
     els.saveRaw.checked = !!v[STORE_SAVE_RAW];
     els.apiKey.value = v[STORE_API_KEY] || '';
+    els.autoStart.checked = !!v[STORE_AUTO_START];
+    els.autoDownload.checked = !!v[STORE_AUTO_DOWNLOAD];
+    if (v[STORE_NAME]) els.name.value = v[STORE_NAME];
     // Auto-open the settings panel if no API key is set yet.
     if (!els.apiKey.value) els.settings.open = true;
   } catch (_) {
@@ -92,6 +103,26 @@ async function loadSettings() {
 els.saveRaw.addEventListener('change', async () => {
   try { await chrome.storage.local.set({ [STORE_SAVE_RAW]: !!els.saveRaw.checked }); }
   catch (_) { /* ignore */ }
+});
+
+els.autoStart.addEventListener('change', async () => {
+  try { await chrome.storage.local.set({ [STORE_AUTO_START]: !!els.autoStart.checked }); }
+  catch (_) { /* ignore */ }
+});
+
+els.autoDownload.addEventListener('change', async () => {
+  try { await chrome.storage.local.set({ [STORE_AUTO_DOWNLOAD]: !!els.autoDownload.checked }); }
+  catch (_) { /* ignore */ }
+});
+
+// Persist the transcript name so auto-start/auto-download can use it.
+let nameSaveTimer = null;
+els.name.addEventListener('input', () => {
+  clearTimeout(nameSaveTimer);
+  nameSaveTimer = setTimeout(async () => {
+    try { await chrome.storage.local.set({ [STORE_NAME]: els.name.value.trim() }); }
+    catch (_) { /* ignore */ }
+  }, 200);
 });
 
 // Save API key on input change. Trim aggressively (people paste keys with

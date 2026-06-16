@@ -180,9 +180,10 @@ clicking Start.
 | File | Role |
 |------|------|
 | `manifest.json` | MV3 config. Permissions limited to `activeTab`, `scripting`, `storage`, host permissions for Meet/Teams, and `api.groq.com`. |
-| `content.js` | Runs in the meeting page. Watches the caption DOM with a `MutationObserver`, finalizes lines, cleans up, calls the summarizer, and triggers the download. |
+| `content.js` | Runs in the meeting page. Watches the caption DOM with a `MutationObserver`, finalizes lines, cleans up, calls the summarizer, and triggers the download. Also handles **auto-start** and syncs the transcript for **auto-download-on-close**. |
 | `summarizer.js` | Groq client + summarization pipeline. Owns the prompts, token budgeting, and map-reduce. Calls Groq's OpenAI-compatible `/chat/completions` endpoint. |
-| `popup.html` / `popup.js` | The toolbar UI (name field + Start/Stop/Download + raw-transcript toggle + API-key settings) that messages the content script. |
+| `background.js` | Service worker. Stashes the latest transcript per tab and, when the tab closes (`chrome.tabs.onRemoved`), downloads the raw `.txt` if auto-download is on. |
+| `popup.html` / `popup.js` | The toolbar UI (name field + Start/Stop/Download + raw-transcript, auto-start, auto-download toggles + API-key settings) that messages the content script. |
 
 ### In-place caption handling (the core trick)
 Meet and Teams **re-render the same caption row in place** as a person keeps
@@ -201,6 +202,21 @@ A `mergeGrowingText()` helper detects pure growth and sliding-window overlap so
 the full utterance is reconstructed without duplication. A final cleanup pass
 removes repeats/fragments and merges consecutive same-speaker lines.
 
+### Automation: auto-start & auto-download-on-close
+Two optional toggles in the popup (persisted in `chrome.storage.local`):
+
+- **Auto-start when captions appear** — `content.js` polls for the captions
+  container and calls `start()` automatically the moment you turn on CC, once
+  per page load. No need to open the popup to begin recording.
+- **Auto-save raw .txt when tab closes** — while recording, `content.js` pushes
+  the latest transcript to `background.js` every few seconds (and once more on
+  `pagehide`). When the meeting tab is closed, the service worker's
+  `chrome.tabs.onRemoved` handler downloads the raw `.txt` from outside the
+  dying tab (the content script can't, because it's already gone). This saves
+  the **raw** transcript — AI summarization needs the live tab, so it only runs
+  on an explicit **Stop**. Clicking Stop clears the stash so you don't get a
+  duplicate download on close.
+
 ### Resilient selectors
 Meet/Teams class names are obfuscated build hashes that change often. All
 selectors live in a **single per-site config object at the top of `content.js`**
@@ -218,7 +234,8 @@ and update that site's block in `SITE_SELECTORS`. Keep durable selectors first.
 | Permission | Why |
 |------------|-----|
 | `activeTab` + `scripting` | Inject the content script into the active meeting tab if it isn't already running. |
-| `storage` | Remember the "Also save raw transcript" toggle and your Groq API key across popup opens. |
+| `storage` | Remember toggles (raw transcript, auto-start, auto-download), the transcript name, and your Groq API key; stash the transcript per tab for auto-download. |
+| `downloads` | Save the raw `.txt` from the background worker when a meeting tab is closed (auto-download-on-close). |
 | `host_permissions` (meet.google.com, teams.microsoft.com, teams.live.com) | Read the caption DOM on supported meeting sites. |
 | `host_permissions` (api.groq.com) | Send the cleaned transcript to Groq for summarization. |
 
