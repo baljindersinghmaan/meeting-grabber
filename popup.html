@@ -14,7 +14,8 @@
     }
     h1 { font-size: 14px; margin: 0 0 10px; }
     label { display: block; font-size: 12px; margin: 0 0 4px; opacity: 0.8; }
-    input[type="text"] {
+    input[type="text"],
+    input[type="password"] {
       width: 100%;
       box-sizing: border-box;
       padding: 6px 8px;
@@ -34,6 +35,33 @@
     button:disabled { opacity: 0.45; cursor: default; }
     #start { background: #1a73e8; color: #fff; border-color: #1a73e8; }
     #stop  { background: #d93025; color: #fff; border-color: #d93025; }
+    .opt {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      margin: 0 0 10px;
+      opacity: 0.85;
+    }
+    .opt input { margin: 0; }
+    details.settings {
+      margin: 0 0 10px;
+      font-size: 12px;
+    }
+    details.settings > summary {
+      cursor: pointer;
+      padding: 4px 0;
+      opacity: 0.85;
+      user-select: none;
+    }
+    details.settings > summary::marker { color: rgba(128,128,128,0.6); }
+    details.settings .hint {
+      font-size: 11px;
+      opacity: 0.7;
+      margin: -4px 0 2px;
+      line-height: 1.4;
+    }
+    details.settings a { color: #1a73e8; }
     #status {
       font-size: 12px;
       min-height: 32px;
@@ -59,6 +87,21 @@
   <div class="row">
     <button id="download">Download</button>
   </div>
+
+  <label class="opt">
+    <input type="checkbox" id="saveRaw" />
+    Also save raw transcript (.txt)
+  </label>
+
+  <details class="settings" id="settings">
+    <summary>⚙️ Settings</summary>
+    <label for="apiKey">Groq API key</label>
+    <input type="password" id="apiKey" placeholder="gsk_..." autocomplete="off" spellcheck="false" />
+    <div class="hint">
+      Free key at <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>.
+      Captions are sent to Groq's API for summarization.
+    </div>
+  </details>
 
   <div id="status">Idle. Turn on captions (CC) in Meet, then click Start.</div>
 

@@ -201,27 +201,54 @@
    *   - pure growth:      "hi there"  ->  "hi there friend"
    *   - sliding window:   "hi there friend"  ->  "there friend how"  (overlap)
    *   - new utterance:    unrelated text reused the same row element
+   *
+   * IMPORTANT: comparisons use NORMALIZED text (lowercase, no punctuation)
+   * because Meet rewrites "Want." -> "want for" -> "Want for that." between
+   * snapshots — exact-string matching would treat each tick as a new utterance
+   * and we'd end up with hundreds of growing duplicates in the transcript.
+   * Output text always keeps the latest casing/punctuation.
+   *
    * Returns { text, isContinuation }. When isContinuation is false the caller
    * should COMMIT the previous line and start a fresh buffer with `next`.
    * ------------------------------------------------------------------------ */
+  function normText(s) {
+    return String(s || '').toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
+  }
+
   function mergeGrowingText(prev, next) {
     if (!prev) return { text: next, isContinuation: true };
     if (next === prev) return { text: prev, isContinuation: true };
-    if (next.startsWith(prev)) return { text: next, isContinuation: true };   // grew
-    if (prev.startsWith(next)) return { text: prev, isContinuation: true };   // caret blip; keep longer
-    // Sliding window: largest k where prev's suffix == next's prefix.
-    const maxK = Math.min(prev.length, next.length);
+
+    const np = normText(prev);
+    const nn = normText(next);
+
+    // Same normalized text (only case/punct changed) -> keep the longer/newer.
+    if (np === nn) {
+      return { text: next.length >= prev.length ? next : prev, isContinuation: true };
+    }
+    if (nn.startsWith(np)) return { text: next, isContinuation: true };   // grew
+    if (np.startsWith(nn)) return { text: prev, isContinuation: true };   // caret blip; keep longer
+
+    // Sliding window: largest k where normalized prev's suffix == next's prefix.
+    // When found, prefer `next` as the merged text (most-recent state). We
+    // don't try to splice the original (non-normalized) strings — offsets
+    // wouldn't line up after punctuation differences, and `next` already
+    // contains the latest growth.
+    const maxK = Math.min(np.length, nn.length);
     for (let k = maxK; k >= MIN_OVERLAP; k--) {
-      if (prev.slice(prev.length - k) === next.slice(0, k)) {
-        return { text: prev + next.slice(k), isContinuation: true };
+      if (np.slice(np.length - k) === nn.slice(0, k)) {
+        return { text: next, isContinuation: true };
       }
     }
-    return { text: next, isContinuation: false };                             // new utterance
+    return { text: next, isContinuation: false };                          // new utterance
   }
 
-  function commit(state) {
+  function commit(state, source) {
     const text = state.text.replace(/\s+/g, ' ').trim();
-    if (text) committed.push({ speaker: state.speaker, text });
+    if (!text) return;
+    const tag = source ? `[${source}]` : '';
+    console.log(LOG, `commit${tag}: ${state.speaker} | ${text.length > 100 ? text.slice(0, 100) + '…' : text}`);
+    committed.push({ speaker: state.speaker, text });
   }
 
   // The MutationObserver callback. Reconciles the live Map against the DOM.
@@ -235,7 +262,7 @@
     // 1) Rows that vanished since last tick are finished -> commit + drop.
     for (const [el, state] of live) {
       if (!present.has(el)) {
-        commit(state);
+        commit(state, 'row-gone');
         live.delete(el);
       }
     }
@@ -253,7 +280,7 @@
       }
       if (speaker !== prev.speaker) {
         // Same element now shows a different speaker -> previous line is done.
-        commit(prev);
+        commit(prev, 'speaker-change');
         live.set(block, { speaker, text });
         continue;
       }
@@ -261,7 +288,7 @@
       if (merged.isContinuation) {
         prev.text = merged.text;            // keep growing the single buffer
       } else {
-        commit(prev);                       // unrelated text reused this row
+        commit(prev, 'new-utterance');      // unrelated text reused this row
         live.set(block, { speaker, text });
       }
     }
@@ -308,29 +335,37 @@
     return lines.map((l) => `${l.speaker}: ${l.text}`).join('\n');
   }
 
-  function safeName(name) {
+  // Build a safe filename. `suffix` includes the extension (e.g. ".txt",
+  // "-summary.txt") so callers can produce sibling files with one helper.
+  function safeName(name, suffix) {
     const base = (name || '').trim() || 'meet-transcript';
-    return base.replace(/[^\w.\- ]+/g, '_').replace(/\s+/g, '_') + '.txt';
+    return base.replace(/[^\w.\- ]+/g, '_').replace(/\s+/g, '_') + (suffix || '.txt');
   }
 
   function buildTranscript() {
     return serialize(cleanupLines(committed));
   }
 
-  // Trigger a .txt download from the page context (no "downloads" permission).
-  function downloadTranscript(name) {
-    const content = buildTranscript();
-    const blob = new Blob([content || '(no captions captured)'], { type: 'text/plain' });
+  // Trigger a download from the page context (no "downloads" permission).
+  function downloadFile(content, name, suffix, mime) {
+    const blob = new Blob([content || ''], { type: mime || 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = safeName(name);
+    a.download = safeName(name, suffix);
     document.body.appendChild(a);
     a.click();
     setTimeout(() => {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     }, 1000);
+  }
+
+  // Mid-meeting raw .txt snapshot (Download button). Never summarizes — that's
+  // a Stop-only action so we don't burn the model on partial transcripts.
+  function downloadTranscriptSnapshot(name) {
+    const content = buildTranscript();
+    downloadFile(content || '(no captions captured)', name, '.txt', 'text/plain');
     return content;
   }
 
@@ -380,31 +415,99 @@
     };
   }
 
+  // Best-effort progress broadcast to the popup. If the popup is closed the
+  // send rejects — we swallow it; the popup polls STATUS when it reopens.
+  function emitProgress(payload) {
+    try {
+      chrome.runtime.sendMessage(payload).catch(() => {});
+    } catch (_) { /* no receivers; ignore */ }
+  }
+
+  // Stop + summarize + download pipeline. Returns the payload the popup expects.
+  async function stopAndDeliver(name, saveRaw, apiKey) {
+    stop();                                       // commits in-progress buffers
+    const lines = cleanupLines(committed);
+    console.log(LOG, `stopAndDeliver: ${lines.length} clean line(s), saveRaw=${!!saveRaw}, hasKey=${!!apiKey}`);
+
+    if (lines.length === 0) {
+      console.log(LOG, 'no lines captured — nothing to download');
+      setIndicator('idle', 'Stopped — no captions captured');
+      hideIndicatorLater();
+      return { ok: true, lines: 0, summary: false, raw: false, reason: 'empty' };
+    }
+
+    const transcript = serialize(lines);
+
+    // No summarizer module loaded → raw .txt fallback. Usually means the tab
+    // has an OLD content script (extension was reloaded but the tab wasn't).
+    if (!window.__meetCaptionSummarizer) {
+      console.warn(LOG, 'summarizer module missing on window — falling back to raw .txt. (Reload the meeting tab if you just updated the extension.)');
+      downloadFile(transcript, name, '.txt', 'text/plain');
+      setIndicator('idle', `Stopped — saved raw transcript (${lines.length} line(s))`);
+      hideIndicatorLater();
+      return { ok: true, lines: lines.length, summary: false, raw: true, reason: 'no-summarizer' };
+    }
+
+    console.log(LOG, 'summarizer module present — invoking Groq');
+    setIndicator('recording', 'Stopped — summarizing…');
+    emitProgress({ type: 'SUMMARY_PROGRESS', stage: 'starting', done: 0, total: 1 });
+
+    let result;
+    try {
+      result = await window.__meetCaptionSummarizer.summarize(lines, {
+        apiKey,
+        onProgress: (p) => emitProgress({ type: 'SUMMARY_PROGRESS', ...p }),
+      });
+    } catch (e) {
+      console.warn(LOG, 'Summarizer threw (unexpected — summarize() should not throw):', e);
+      result = { ok: false, reason: 'error', error: String(e && e.message || e) };
+    }
+    console.log(LOG, 'summarizer result:', result && { ok: result.ok, reason: result.reason, summaryLen: result.summary && result.summary.length });
+
+    if (result && result.ok) {
+      downloadFile(result.summary, name, '-summary.txt', 'text/plain');
+      if (saveRaw) downloadFile(transcript, name, '.txt', 'text/plain');
+      setIndicator('idle', `Stopped — summary saved (${lines.length} line(s))`);
+      hideIndicatorLater();
+      return {
+        ok: true, lines: lines.length,
+        summary: true, raw: !!saveRaw, reason: 'ok',
+      };
+    }
+
+    // Summarization failed — fall back to raw .txt regardless of the toggle.
+    downloadFile(transcript, name, '.txt', 'text/plain');
+    setIndicator('idle', `Stopped — saved raw transcript (${lines.length} line(s))`);
+    hideIndicatorLater();
+    return {
+      ok: true, lines: lines.length,
+      summary: false, raw: true,
+      reason: (result && result.reason) || 'error',
+      error: result && result.error,
+    };
+  }
+
   /* --- popup <-> content messaging ---------------------------------------- */
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     switch (msg && msg.type) {
       case 'START':
         sendResponse(start());
-        break;
-      case 'STOP': {
-        const res = stop();
-        // Per spec: Stop flushes and triggers the download.
-        downloadTranscript(msg.name);
-        sendResponse(res);
-        break;
-      }
+        return false;                            // sync response
+      case 'STOP':
+        stopAndDeliver(msg.name, !!msg.saveRaw, msg.apiKey || '').then(sendResponse);
+        return true;                             // async response
       case 'DOWNLOAD':
-        flushLive();            // include anything still live, but keep capturing
-        downloadTranscript(msg.name);
+        flushLive();                             // include anything still live, but keep capturing
+        downloadTranscriptSnapshot(msg.name);
         sendResponse({ ok: true, lines: cleanupLines(committed).length });
-        break;
+        return false;
       case 'STATUS':
         sendResponse(status());
-        break;
+        return false;                            // sync now (no availability lookup)
       default:
         sendResponse({ ok: false, error: 'unknown-message' });
+        return false;
     }
-    return true;              // keep the message channel open for the async response
   });
 
   console.log(LOG, 'content script loaded on', location.href);
